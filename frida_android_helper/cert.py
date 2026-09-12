@@ -114,6 +114,35 @@ def _find_cacerts_dir(device):
     return "/system/etc/security/cacerts"
 
 
+def _ensure_path_writable(device, path):
+    """Make sure `path` is writable, remounting rw the mount point that actually owns it.
+
+    Modern (system-as-root) devices don't mount /system as its own mount point,
+    and rooting solutions like Magisk often already overlay a writable tmpfs
+    directly on the cacerts directory - so blindly remounting /system can be
+    both wrong (no such mount point) and unnecessary (already writable).
+    """
+    probe = "{}/.fah_write_test".format(path)
+    # root=True prefixes with "su -c " without adding a shell of its own, so a compound
+    # command must be quoted as a single argument or "&&"/redirections get parsed by the
+    # outer (non-root) shell instead of running under su.
+    probe_cmd = "'touch {0} 2>&1 && rm -f {0}'".format(probe)
+    if not perform_cmd(device, probe_cmd, root=True).strip():
+        eprint("🔥 {} is already writable, no remount needed...".format(path))
+        return True
+
+    mountpoint = path
+    while mountpoint != "/" and "is not a mountpoint" in perform_cmd(device, "mountpoint {}".format(mountpoint), root=True):
+        mountpoint = os.path.dirname(mountpoint)
+
+    eprint("🔥 Remounting {} as rw (mount -o rw,remount {})...".format(mountpoint, mountpoint))
+    err = perform_cmd(device, "mount -o rw,remount {}".format(mountpoint), root=True)
+    if err:
+        eprint("❌ {}".format(err))
+        return False
+    return True
+
+
 def install_certificate(certificate=None):
     eprint("⚡️ Installing certificate...")
     if certificate is None:
@@ -196,10 +225,7 @@ def install_certificate(certificate=None):
                 eprint("❌ {}".format(err))
                 continue
         else:
-            eprint("🔥 Remounting the system rw: mount -o rw,remount /system...")
-            err = perform_cmd(device, "mount -o rw,remount /system", root=True)
-            if err:
-                eprint("❌ {}".format(err))
+            if not _ensure_path_writable(device, path_cacerts):
                 continue
 
         eprint("🔥 Moving the certificate to {}/{}.{}...".format(path_cacerts, x509_old_hash, offset))
