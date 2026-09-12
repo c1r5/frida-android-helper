@@ -76,11 +76,22 @@ def generate_certificate(_=None):
     shutil.copyfile("fah_ca.der", PATH_CACHE_CA_DER)
 
 
+def _load_certificate_as_der(certificate_path):
+    """Read a certificate file, accepting either PEM or DER encoding, and return DER bytes (or None if invalid)."""
+    with open(certificate_path, "rb") as f:
+        data = f.read()
+    try:
+        return x509.load_der_x509_certificate(data, default_backend()).public_bytes(serialization.Encoding.DER)
+    except ValueError:
+        pass
+    try:
+        return x509.load_pem_x509_certificate(data, default_backend()).public_bytes(serialization.Encoding.DER)
+    except ValueError:
+        return None
+
+
 def install_certificate(certificate=None):
     eprint("⚡️ Installing certificate...")
-    # hardcoded one from running
-    # openssl x509 -inform DER -subject_hash_old -in fah_ca.der
-    x509_old_hash = "35aa2e12"
     if certificate is None:
         eprint("🔥 Certificate not specified, checking the existence of a default fah_ca.der...")
         if os.path.isfile("fah_ca.der"):
@@ -95,31 +106,34 @@ def install_certificate(certificate=None):
         else:
             eprint("❌ fah_ca.der / cacert.der not found...")
             return
-
-        if os.path.isfile("fah_ca.der") or os.path.isfile("cacert.der"): # hacky: in case we didn't get it from cache...
-            eprint("⚡️ Caching {} to {}...".format(certificate, PATH_CACHE_CA_DER))
-            os.makedirs(os.path.dirname(PATH_CACHE_CA_DER), exist_ok=True)
-            shutil.copyfile(certificate, PATH_CACHE_CA_DER)
+    elif not os.path.isfile(certificate):
+        eprint("❌ {} not found...".format(certificate))
+        return
     else:
-        if os.path.isfile(certificate):
-            eprint("🔥 Found {}...".format(certificate))
-            # TODO: implement this using pure python cryptography module; it does not seem to be implemented (yet?)
-            # So either leave this as it is, or re-implement the old hash ourselves...
-            # https://github.com/openssl/openssl/blob/47b4ccea9cb9b924d058fd5a8583f073b7a41656/crypto/x509/x509_cmp.c#L207
-            result = subprocess.run(
-                ["openssl", "x509", "-inform", "DER", "-subject_hash_old", "-in", certificate, "-noout"],
-                capture_output=True)
-            if result.returncode == 0:
-                x509_old_hash = result.stdout.strip().decode("utf-8")
-                eprint("⚡️ Caching {} to {}...".format(certificate, PATH_CACHE_CA_DER))
-                os.makedirs(os.path.dirname(PATH_CACHE_CA_DER), exist_ok=True)
-                shutil.copyfile(certificate, PATH_CACHE_CA_DER)
-            else:
-                eprint("❌ {}".format(result.stderr.decode("utf-8")))
-                return
-        else:
-            eprint("❌ {} not found...".format(certificate))
-            return
+        eprint("🔥 Found {}...".format(certificate))
+
+    eprint("⚡️ Reading {} (PEM or DER accepted)...".format(certificate))
+    der_bytes = _load_certificate_as_der(certificate)
+    if der_bytes is None:
+        eprint("❌ {} is not a valid PEM or DER certificate...".format(certificate))
+        return
+
+    eprint("⚡️ Caching {} to {}...".format(certificate, PATH_CACHE_CA_DER))
+    os.makedirs(os.path.dirname(PATH_CACHE_CA_DER), exist_ok=True)
+    with open(PATH_CACHE_CA_DER, "wb") as f:
+        f.write(der_bytes)
+    certificate = PATH_CACHE_CA_DER
+
+    # TODO: implement this using pure python cryptography module; it does not seem to be implemented (yet?)
+    # So either leave this as it is, or re-implement the old hash ourselves...
+    # https://github.com/openssl/openssl/blob/47b4ccea9cb9b924d058fd5a8583f073b7a41656/crypto/x509/x509_cmp.c#L207
+    result = subprocess.run(
+        ["openssl", "x509", "-inform", "DER", "-subject_hash_old", "-in", certificate, "-noout"],
+        capture_output=True)
+    if result.returncode != 0:
+        eprint("❌ {}".format(result.stderr.decode("utf-8")))
+        return
+    x509_old_hash = result.stdout.strip().decode("utf-8")
 
     # install them certificates on devices
     for device in get_adb_devices():
