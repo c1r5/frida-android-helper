@@ -5,7 +5,7 @@ from cryptography import x509
 from datetime import datetime, timedelta
 from uuid import uuid4
 from frida_android_helper.utils import *
-import pkg_resources
+import importlib.resources
 import shutil
 import appdirs
 import os
@@ -90,6 +90,30 @@ def _load_certificate_as_der(certificate_path):
         return None
 
 
+def _find_cacerts_dir(device):
+    """Locate the device's actual system cacerts directory instead of assuming /system."""
+    candidates = [
+        "/system/etc/security/cacerts",
+        "/system_root/system/etc/security/cacerts",  # older system-as-root layout
+        "/product/etc/security/cacerts",
+        "/vendor/etc/security/cacerts",
+    ]
+    for candidate in candidates:
+        if "No such file or directory" not in perform_cmd(device, "ls -d {}".format(candidate)):
+            return candidate
+
+    eprint("🔥 None of the known cacerts paths were found, searching the device filesystem...")
+    result = perform_cmd(device, "find / -maxdepth 6 -type d -name cacerts 2>/dev/null")
+    for line in result.splitlines():
+        line = line.strip()
+        if line and "apex" not in line:
+            eprint("🔥 Found cacerts directory at {}...".format(line))
+            return line
+
+    eprint("⚠️  Could not locate the cacerts directory, falling back to /system/etc/security/cacerts...")
+    return "/system/etc/security/cacerts"
+
+
 def install_certificate(certificate=None):
     eprint("⚡️ Installing certificate...")
     if certificate is None:
@@ -138,11 +162,12 @@ def install_certificate(certificate=None):
     # install them certificates on devices
     for device in get_adb_devices():
         eprint("📲 Device: {} ({})".format(get_device_model(device), device.get_serial_no()))
-        path_cacerts = "/system/etc/security/cacerts"
+        path_cacerts = _find_cacerts_dir(device)
+        eprint("🔥 Using cacerts directory: {}...".format(path_cacerts))
         offset = 0
         while "No such file or directory" not in \
-                perform_cmd(device, "ls /system/etc/security/cacerts/{}.{}".format(x509_old_hash, offset)):
-            eprint("❌ Found /system/etc/security/cacerts/{}.{}, incrementing by 1...".format(x509_old_hash, offset))
+                perform_cmd(device, "ls {}/{}.{}".format(path_cacerts, x509_old_hash, offset)):
+            eprint("❌ Found {}/{}.{}, incrementing by 1...".format(path_cacerts, x509_old_hash, offset))
             offset += 1
 
         eprint("🔥 Pushing {} to {}/{}...".format(certificate, "/data/local/tmp", x509_old_hash))
@@ -154,9 +179,11 @@ def install_certificate(certificate=None):
             eprint("    for more info, see: https://www.g1a55er.net/Android-14-Still-Allows-Modification-of-System-Certificates")
             path_cacerts = "/apex/com.android.conscrypt/cacerts"
 
-            script = pkg_resources.resource_filename("frida_android_helper", "scripts/android14_apex.sh")
             eprint("🔥 Pushing android14_apex.sh script to /data/local/tmp/android14_apex.sh...")
-            device.push(script, "/data/local/tmp/android14_apex.sh")
+            with importlib.resources.as_file(
+                importlib.resources.files("frida_android_helper").joinpath("scripts", "android14_apex.sh")
+            ) as script:
+                device.push(str(script), "/data/local/tmp/android14_apex.sh")
 
             eprint("🔥 chmod +x /data/local/tmp/android14_apex.sh...")
             err = perform_cmd(device, "chmod +x /data/local/tmp/android14_apex.sh", root=True)

@@ -1,4 +1,4 @@
-import pkg_resources
+import importlib.resources
 import frida
 
 
@@ -15,7 +15,7 @@ def message_callback(message, data):
 
 
 def get_js_hook(js_filename):
-    return pkg_resources.resource_string("frida_android_helper", "frida_hooks/{}".format(js_filename)).decode("utf-8")
+    return importlib.resources.files("frida_android_helper").joinpath("frida_hooks", js_filename).read_text()
 
 
 def load_script_with_device(device, pkg_name, js_file):
