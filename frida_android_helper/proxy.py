@@ -2,14 +2,15 @@ from frida_android_helper.utils import *
 
 
 # Enabling and disabling is powered by https://stackoverflow.com/a/47476009
-def enable_proxy(host=None, port="8080"):
+def enable_proxy(host=None, port="8888"):
     if host is None:
         host = get_ip_address()
         if host == "127.0.0.1":
             eprint("⚠️  Can't determine ip address, provide an IP or connect your PC to the interwebz")
             return
-    if not port.isdigit():  # Just in case...
-        port = 8080
+    port = str(port)
+    if not port.isdigit() or not 1 <= int(port) <= 65535:
+        port = "8888"
 
     eprint("⚡️ Enabling the Android proxy...")
     for device in get_adb_devices():
@@ -31,6 +32,9 @@ def disable_proxy():
 
         result = device.shell("settings delete global global_http_proxy_port")
         eprint("🔥 settings delete global global_http_proxy_port -> {}".format(result.strip()))
+
+        result = device.shell("settings put global http_proxy :0")
+        eprint("🔥 settings put global http_proxy :0 -> {}".format(result.strip()))
 
         perform_cmd(device, "am broadcast -a android.intent.action.PROXY_CHANGE", root=True)  # needs to be run as root
         eprint("🔥 Sent PROXY_CHANGE broadcast...")
